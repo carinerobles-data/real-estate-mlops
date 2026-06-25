@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+mlflow-env/
+
+# Data (DVC gérera les fichiers, on ignore les fichiers physiques)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# MLflow et logs
+mlruns/
+mlflow.db
+experiments/
+*.log
+.DS_Store
+
+# Modèles (gérés par DVC ou stockés localement)
+models/*.pkl
+
+# VS Code et autres IDE
+.vscode/
+.idea/
+
+# DVC (DVC crée son propre dossier de config)
+.dvc/
+.dvcignore

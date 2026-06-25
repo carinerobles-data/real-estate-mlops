@@ -9,6 +9,7 @@ mlflow-env/
 # Data (DVC gérera les fichiers, on ignore les fichiers physiques)
 data/raw/*
 data/processed/*
+!data/processed/*.dvc
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 

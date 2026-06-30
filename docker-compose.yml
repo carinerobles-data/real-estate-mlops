@@ -1,91 +1,113 @@
-version: '3.8'
+
 
 networks:
   app-network:
     driver: bridge
 
 services:
-  # Service de tracking MLflow
   mlflow:
     image: ghcr.io/mlflow/mlflow:latest
     container_name: mlflow
+    restart: always
     networks:
       - app-network
     ports:
       - "5001:5000"
-    command: mlflow server --backend-store-uri /mlruns --default-artifact-root /mlruns --host 0.0.0.0
+    environment:
+      - MLFLOW_TRACKING_INSECURE_DISABLE_HOST_CHECK=true
+      - MLFLOW_ALLOW_FILE_STORE=true
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri /mlruns
+      --default-artifact-root /mlruns
     volumes:
       - ./mlruns:/mlruns
 
-  # API d'inférence
   api:
-    build: .
+    image: python:3.9-slim
     container_name: api
-    networks:
-      - app-network
+    restart: always
+    working_dir: /app
     volumes:
       - .:/app
-      - ./models:/app/models:ro
-    environment:
-      - MLFLOW_TRACKING_URI=http://mlflow:5001
-      - MODEL_PATH=/app/models/model_production.json
-    # Pas de port exposé directement ici, Nginx s'en occupe
-
-  # Frontend Streamlit
-  streamlit:
-    build: .
-    container_name: streamlit
-    command: streamlit run streamlit_app.py --server.port 8501
-    ports:
-      - "8501:8501"
+    command: >
+      bash -c "pip install fastapi uvicorn xgboost pandas prometheus-fastapi-instrumentator scikit-learn && 
+               python -m uvicorn api.main:app --host 0.0.0.0 --port 8000"
     networks:
       - app-network
+    environment:
+      - MODEL_PATH=/app/models/model_production.json
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    depends_on:
+      - mlflow
 
-  # Orchestration Airflow
   airflow:
-    image: apache/airflow:2.9.1
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
     container_name: airflow
     restart: always
-    environment:
-      - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
-      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - .:/app
-    ports:
-      - "8080:8080"
-    command: bash -c "airflow db init && airflow users create --username admin --firstname admin --lastname admin --role Admin --email admin@admin.com --password admin && airflow webserver"
-    networks:
-      - app-network
-
-  # Load Balancer
-  nginx:
-    image: nginx:alpine
-    container_name: nginx
-    ports:
-      - "8000:80"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
     networks:
       - app-network
     depends_on:
+      - mlflow
+      - api
+    environment:
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__CORE__EXECUTOR=SequentialExecutor
+      - AIRFLOW__CORE__SQL_ALCHEMY_CONN=sqlite:////opt/airflow/airflow.db
+      - PYTHONPATH=/app
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - .:/app
+      - airflow_data:/opt/airflow
+    ports:
+      - "8080:8080"
+    command: >
+      bash -c "
+      airflow db migrate &&
+      airflow users create
+      --username admin
+      --firstname admin
+      --lastname admin
+      --role Admin
+      --email admin@admin.com
+      --password admin || true &&
+      airflow scheduler &
+      exec airflow webserver
+      "
+
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    restart: always
+    ports:
+      - "8001:80"
+    networks:
+      - app-network
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
       - api
 
-  # Monitoring: Prometheus
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
+    restart: always
     ports:
       - "9090:9090"
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
     networks:
       - app-network
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
 
-  # Monitoring: Grafana
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
+    restart: always
     ports:
       - "3000:3000"
     networks:
@@ -99,3 +121,4 @@ services:
 
 volumes:
   grafana_data:
+  airflow_data:

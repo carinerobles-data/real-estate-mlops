@@ -1,12 +1,13 @@
 from airflow import DAG
 from airflow.operators.bash import BashOperator
+from airflow.providers.http.operators.http import SimpleHttpOperator
 from datetime import datetime, timedelta
 
 default_args = {
     'owner': 'mlops_team',
     'start_date': datetime(2026, 6, 26),
     'retries': 1,
-    'retry_delay': timedelta(minutes=5),
+    'retry_delay': timedelta(minutes=10),
 }
 
 with DAG(
@@ -28,11 +29,18 @@ with DAG(
         bash_command='python /app/src/data/preprocess.py'
     )
 
-    # 3. Entraînement (Appelle production_train.py)
+    # 3. Entraînement et Tracking MLflow
+    # On ajoute des variables d'environnement pour MLflow
     t3 = BashOperator(
         task_id='train_model', 
-        bash_command='python /app/models/production_train.py'
+        bash_command='export MLFLOW_TRACKING_URI=http://mlflow:5000 && python /app/src/models/production_train.py',
+        env={"PYTHONPATH": "/app"}
     )
 
-    # Définition de l'ordre d'exécution
-    t1 >> t2 >> t3
+    # 4. Nouvelle Tâche : Notifier l'API de recharger le nouveau modèle
+    # 4. Tâche de rechargement ultra-robuste
+    t4 = BashOperator(
+        task_id='reload_api_model',
+        # On utilise le nom du service 'api' et on force le POST
+        bash_command='curl -X POST http://api:8000/reload_model'
+    )

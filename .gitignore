@@ -9,9 +9,10 @@ mlflow-env/
 # Data
 data/raw/*
 data/processed/*
-!data/processed/*.dvc
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+# On autorise tous les fichiers .dvc pour le versioning de données
+!*.dvc
 
 # MLflow et logs
 mlruns/

@@ -1,32 +1,47 @@
-import pandas as pd
-import xgboost as xgb
 import os
 import sys
-import mlflow
-import mlflow.xgboost
-from sklearn.metrics import mean_absolute_error, r2_score
 
 # ==========================================
-# CONFIGURATION
+# CONFIGURATION DE SÉCURITÉ MLFLOW
+# (Doit impérativement être avant les autres imports MLflow)
 # ==========================================
+os.environ["MLFLOW_TRACKING_INSECURE_DISABLE_HOST_CHECK"] = "true"
 TRACKING_URI = "http://mlflow:5000"
-BASE_DIR = "/app" # Simplifié pour être sûr dans le conteneur
+os.environ["MLFLOW_TRACKING_URI"] = TRACKING_URI
+
+import pandas as pd
+import xgboost as xgb
+import mlflow
+import mlflow.xgboost
+import dvc.api  # Import pour la traçabilité
+from sklearn.metrics import mean_absolute_error, r2_score
+
+# Forçage de l'URI de tracking
+mlflow.set_tracking_uri(TRACKING_URI)
+
+# ==========================================
+# PARAMÈTRES ET CHEMINS
+# ==========================================
+BASE_DIR = "/app"
 INPUT_PATH = os.path.join(BASE_DIR, "data", "processed", "dvf_processed.parquet")
 MODEL_DIR = os.path.join(BASE_DIR, "models")
 
 os.makedirs(MODEL_DIR, exist_ok=True)
-os.environ["MLFLOW_TRACKING_URI"] = TRACKING_URI
-os.environ["MLFLOW_TRACKING_INSECURE_DISABLE_HOST_CHECK"] = "true"
 
 PARAMS = {
-    "n_estimators": 100, "max_depth": 4, "learning_rate": 0.05,
-    "subsample": 0.8, "colsample_bytree": 0.7, "n_jobs": 2, "random_state": 42
+    "n_estimators": 100, 
+    "max_depth": 4, 
+    "learning_rate": 0.05,
+    "subsample": 0.8, 
+    "colsample_bytree": 0.7, 
+    "n_jobs": 2, 
+    "random_state": 42
 }
 
 def train_production_model():
     print("\n========== PRODUCTION TRAIN ==========")
 
-    # 1. Vérification
+    # 1. Vérification des données
     if not os.path.exists(INPUT_PATH):
         print(f"ERREUR : Fichier introuvable à {INPUT_PATH}")
         sys.exit(1)
@@ -60,25 +75,39 @@ def train_production_model():
     model.save_model(model_path)
     print(f"Modèle sauvegardé localement : {model_path}")
 
-    # 6. MLflow (Avec gestion d'erreur pour éviter le blocage du pipeline)
+    # 6. MLflow (Avec traçabilité DVC sécurisée)
     try:
         print("Enregistrement dans MLflow...")
-        mlflow.set_tracking_uri(TRACKING_URI)
-        mlflow.set_experiment("DVF_Production_Final")
+        mlflow.set_experiment("DVF_Production_VF")
+
+        # Récupération sécurisée de l'empreinte DVC
+        try:
+            data_url = dvc.api.get_url('data/processed/dvf_processed.parquet', repo=BASE_DIR)
+        except Exception as dvc_e:
+            print(f"Avertissement DVC : Impossible de récupérer l'URL ({dvc_e}). Utilisation de 'local_file'.")
+            data_url = "local_file_no_dvc_url"
 
         with mlflow.start_run(run_name="Production_Refit_Light"):
             mlflow.log_params(PARAMS)
-            mlflow.log_metrics({"mae": mean_absolute_error(y, model.predict(X)), "r2": r2_score(y, model.predict(X))})
+            mlflow.log_param("data_dvc_url", data_url) # Lien Data-Modèle
             
-            # Utilisation de artifact_path au lieu de name pour éviter des conflits
+            # Calcul et logging des métriques
+            preds = model.predict(X)
+            mlflow.log_metrics({
+                "mae": mean_absolute_error(y, preds), 
+                "r2": r2_score(y, preds)
+            })
+            
+            # Logging du modèle
             mlflow.xgboost.log_model(
                 model, 
                 artifact_path="model_production",
                 registered_model_name="DVF_Production_Model"
             )
-        print("MLflow OK")
+        print(f"MLflow OK. Dataset version: {data_url}")
+        
     except Exception as e:
-        print(f"NOTE : MLflow a échoué, mais le modèle est disponible localement. Erreur : {e}")
+        print(f"NOTE : MLflow a échoué. Le pipeline continue. Erreur : {e}")
 
     print("========== TRAIN FINI ==========")
 
